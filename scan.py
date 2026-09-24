@@ -14,32 +14,45 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Detection patterns: (label, compiled regex).
-# The "Generic secret assignment" pattern reports only the variable name,
+# Detection rules: (rule_id, label, compiled regex). This table is the single
+# source of truth for every pattern the scanner knows; both the CLI and the
+# local playground UI consume it from here. Do not duplicate these regexes.
+# The "Generic secret assignment" rule reports only the variable name,
 # never the captured value.
 # ---------------------------------------------------------------------------
 
-PATTERNS = [
-    ("AWS access key",
+RULES = [
+    ("aws-access-key",
+     "AWS access key",
      re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("GitHub token",
+    ("github-token",
+     "GitHub token",
      re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b")),
-    ("GitHub fine-grained token",
+    ("github-fine-grained-token",
+     "GitHub fine-grained token",
      re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
-    ("Slack token",
+    ("slack-token",
+     "Slack token",
      re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
-    ("Private key",
+    ("private-key",
+     "Private key",
      re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----")),
-    ("Generic secret assignment",
+    ("generic-secret-assignment",
+     "Generic secret assignment",
      re.compile(
          r"(?i)\b(api[_-]?key|api[_-]?secret|secret|passwd|password|pwd"
          r"|auth[_-]?token|access[_-]?token|client[_-]?secret)\b"
          r"\s*[:=]\s*['\"]?([A-Za-z0-9_\-+/=]{12,})['\"]?"
      )),
 ]
+
+# Rule id for the entropy heuristic (not a regex rule, so it lives outside
+# RULES but is still defined exactly once, here).
+HIGH_ENTROPY_RULE_ID = "high-entropy-string"
 
 # Long token-ish runs are candidates for the entropy check.
 ENTROPY_CANDIDATE = re.compile(r"[A-Za-z0-9_\-+/=]{20,}")
@@ -72,6 +85,29 @@ def to_bool(value):
 
 
 # ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Finding:
+    """One detected secret. ``label`` is human-readable and never contains a
+    secret value; ``spans`` are (start, end) offsets of the secret *value*
+    within the line so UIs can mask it."""
+    rule_id: str
+    label: str
+    line: int = 0            # 1-based; 0 = not yet assigned
+    spans: list = field(default_factory=list)
+    filename: str = ""
+
+    def masked_line(self, line_text):
+        """Return the line with every secret span replaced by [redacted]."""
+        out = line_text
+        for start, end in sorted(set(self.spans), reverse=True):
+            out = out[:start] + "[redacted]" + out[end:]
+        return out
+
+
+# ---------------------------------------------------------------------------
 # Entropy
 # ---------------------------------------------------------------------------
 
@@ -86,30 +122,56 @@ def shannon_entropy(text):
 
 
 def scan_line(line, entropy_threshold):
-    """Return a list of finding labels for one line. Never returns secrets."""
-    findings = []  # (label, start, end)
-    for label, pattern in PATTERNS:
+    """Return a list of Finding objects for one line (line numbers unset).
+    Labels never contain secret values."""
+    findings = []
+    for rule_id, label, pattern in RULES:
         for match in pattern.finditer(line):
-            if label == "Generic secret assignment":
+            if rule_id == "generic-secret-assignment":
                 var_name = match.group(1)
-                findings.append(
-                    (f"Possible hardcoded secret assigned to '{var_name}'",
-                     match.start(), match.end()))
+                # Mask only the captured value (group 2), keep the name.
+                span = (match.start(2), match.end(2))
+                findings.append(Finding(
+                    rule_id,
+                    f"Possible hardcoded secret assigned to '{var_name}'",
+                    spans=[span]))
             else:
-                findings.append((f"{label} detected",
-                                 match.start(), match.end()))
-    # Entropy pass: skip spans already claimed by a named pattern so one
+                findings.append(Finding(
+                    rule_id, f"{label} detected",
+                    spans=[(match.start(), match.end())]))
+    # Entropy pass: skip spans already claimed by a named rule so one
     # secret is reported once, not twice.
-    claimed = [(s, e) for _, s, e in findings]
+    claimed = [span for f in findings for span in f.spans]
     for match in ENTROPY_CANDIDATE.finditer(line):
         token = match.group(0)
         if any(s < match.end() and e > match.start() for s, e in claimed):
             continue
         if shannon_entropy(token) >= entropy_threshold:
-            findings.append(("High-entropy string (possible secret)",
-                             match.start(), match.end()))
+            findings.append(Finding(
+                HIGH_ENTROPY_RULE_ID,
+                "High-entropy string (possible secret)",
+                spans=[(match.start(), match.end())]))
             claimed.append((match.start(), match.end()))
-    return [label for label, _, _ in findings]
+    return findings
+
+
+def find_secrets(text, filename="", entropy_threshold=4.5, exclude=()):
+    """Scan raw text and return a list of Finding with 1-based line numbers.
+
+    Honors the same skip rules as the CLI: files under an ``exclude``
+    prefix and dependency lockfiles are not scanned.
+    """
+    if filename:
+        rel = filename.strip().lstrip("./")
+        if excluded(rel, exclude) or is_lockfile(rel):
+            return []
+    findings = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for finding in scan_line(line, entropy_threshold):
+            finding.line = lineno
+            finding.filename = filename
+            findings.append(finding)
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +336,8 @@ def main():
         for lineno, line in enumerate(read_lines(repo, relpath), start=1):
             if lines is not None and lineno not in lines:
                 continue
-            for label in scan_line(line, entropy_threshold):
-                findings.append((relpath, lineno, label))
+            for finding in scan_line(line, entropy_threshold):
+                findings.append((relpath, lineno, finding.label))
 
     emit_annotations(findings)
     write_summary(findings)

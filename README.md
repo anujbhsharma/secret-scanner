@@ -87,6 +87,21 @@ suspicious string than wave through a real key — tune the threshold to your
 team's tolerance, and `exclude` the paths that cry wolf (looking at you,
 `tests/fixtures/`).
 
+## Try it locally
+
+Want to poke the scanner without committing anything? There's a playground:
+
+```bash
+python ui.py            # or: python ui.py --port 8000
+```
+
+Then open http://127.0.0.1:8000 — a single page (stdlib only, no build step,
+no CDN) where you can paste code, load the leaky/clean examples, tweak the
+exclude prefixes and entropy threshold, and see findings highlighted on
+redacted lines. It runs the exact same `scan.py` engine as the action, so
+what you see is what CI would flag. Nothing leaves your machine, and secret
+values are never displayed — not even to you.
+
 ## Local development
 
 ```bash
@@ -96,7 +111,9 @@ python -m pytest tests/ -v
 The suite builds throwaway git repos, plants fake secrets from
 `tests/fixtures/`, and runs `scan.py` exactly the way the action does —
 including diff-only mode, exclusions, lockfile skipping, and a strict
-"no secret value may appear in output" assertion.
+"no secret value may appear in output" assertion. `tests/test_ui.py` spins up
+the playground server on an ephemeral port and asserts the API returns the
+same findings as the CLI, with the same redaction guarantees.
 
 ## License
 

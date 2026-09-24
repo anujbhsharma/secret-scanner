@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secret-scanner playground</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+    --danger: #f85149; --danger-bg: rgba(248,81,73,.12);
+    --ok: #3fb950; --ok-bg: rgba(63,185,80,.12);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header { padding: 20px 24px 0; max-width: 1100px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 22px; }
+  header h1 .lock { color: var(--danger); }
+  header p { color: var(--muted); margin: 6px 0 0; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px;
+         display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 16px; }
+  textarea {
+    width: 100%; min-height: 220px; resize: vertical;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 12px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+         margin-top: 12px; }
+  .row label { color: var(--muted); font-size: 13px; }
+  input[type=text], input[type=number] {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px;
+  }
+  input[type=number] { width: 80px; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--border);
+                 color: var(--text); font-weight: 500; }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .5; cursor: wait; }
+  #results:empty { display: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+  .chip { border-radius: 999px; padding: 4px 12px; font-size: 12px;
+          font-weight: 600; }
+  .chip.bad { background: var(--danger-bg); color: var(--danger);
+              border: 1px solid var(--danger); }
+  .chip.good { background: var(--ok-bg); color: var(--ok);
+               border: 1px solid var(--ok); }
+  .chip.rule { background: var(--bg); color: var(--text);
+               border: 1px solid var(--border); font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px;
+           border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  code.rule { background: var(--bg); padding: 2px 8px; border-radius: 4px;
+              font-size: 12px; border: 1px solid var(--border); }
+  .codeview { background: var(--bg); border: 1px solid var(--border);
+              border-radius: 6px; overflow-x: auto; margin-top: 12px;
+              font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .codeline { display: flex; white-space: pre; padding: 0 12px 0 0; }
+  .codeline .n { width: 52px; flex: none; text-align: right; padding-right: 12px;
+                 color: var(--muted); user-select: none; }
+  .codeline.hit { background: var(--danger-bg); }
+  .codeline.hit .n { color: var(--danger); font-weight: 700; }
+  .err { color: var(--danger); }
+  footer { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="lock">🔒</span> secret-scanner playground</h1>
+  <p>Paste some code, hit scan, and watch the sniffer do its thing.
+     Secret <em>values</em> are never shown — not here, not in CI, not ever.</p>
+</header>
+<main>
+  <section class="panel">
+    <textarea id="input" spellcheck="false"
+      placeholder="Paste code or config text here…"></textarea>
+    <div class="row">
+      <button class="ghost" id="btn-leaky">Load leaky example</button>
+      <button class="ghost" id="btn-clean">Load clean example</button>
+    </div>
+    <div class="row">
+      <label>filename <input type="text" id="filename" value="pasted.txt" size="18"></label>
+      <label>exclude prefixes <input type="text" id="exclude" placeholder="e.g. vendor,fixtures" size="18"></label>
+      <label>entropy threshold <input type="number" id="threshold" value="4.5" step="0.1" min="0" max="10"></label>
+      <button id="btn-scan">Scan 🔍</button>
+    </div>
+  </section>
+
+  <section class="panel" id="results"></section>
+
+  <footer class="panel">
+    Runs the exact same detection engine as the GitHub Action
+    (<code>scan.py</code>) — same patterns, same redaction guarantees.
+    Nothing leaves your machine.
+  </footer>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const results = $("results");
+
+async function loadExample(name) {
+  const r = await fetch("/api/example?name=" + encodeURIComponent(name));
+  const data = await r.json();
+  if (!r.ok) { alert(data.error || "failed to load example"); return; }
+  $("input").value = data.text;
+  $("filename").value = data.filename;
+  results.innerHTML = "";
+}
+
+function chip(text, cls) {
+  const s = document.createElement("span");
+  s.className = "chip " + cls;
+  s.textContent = text;
+  return s;
+}
+
+function renderSummary(summary) {
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  if (summary.count === 0) {
+    chips.appendChild(chip("0 findings — squeaky clean ✨", "good"));
+  } else {
+    chips.appendChild(chip(summary.count + " finding" +
+      (summary.count === 1 ? "" : "s") + " 🚨", "bad"));
+    for (const [rule, n] of Object.entries(summary.by_rule))
+      chips.appendChild(chip(rule + " × " + n, "rule"));
+  }
+  return chips;
+}
+
+function renderTable(findings) {
+  const t = document.createElement("table");
+  const head = t.insertRow();
+  ["Rule", "Line", "What the scanner saw"].forEach(h => {
+    const th = document.createElement("th"); th.textContent = h;
+    head.appendChild(th);
+  });
+  for (const f of findings) {
+    const row = t.insertRow();
+    const rc = row.insertCell();
+    const code = document.createElement("code");
+    code.className = "rule"; code.textContent = f.rule_id;
+    rc.appendChild(code);
+    row.insertCell().textContent = f.line;
+    row.insertCell().textContent = f.preview_redacted;
+  }
+  return t;
+}
+
+function renderCode(lines) {
+  const div = document.createElement("div");
+  div.className = "codeview";
+  for (const l of lines) {
+    const dl = document.createElement("div");
+    dl.className = "codeline" + (l.has_finding ? " hit" : "");
+    const n = document.createElement("span");
+    n.className = "n"; n.textContent = l.n;
+    const txt = document.createElement("span");
+    txt.textContent = l.text;   // textContent: no HTML injection, ever
+    dl.appendChild(n); dl.appendChild(txt);
+    div.appendChild(dl);
+  }
+  return div;
+}
+
+async function scan() {
+  const btn = $("btn-scan");
+  btn.disabled = true;
+  results.innerHTML = "";
+  try {
+    const r = await fetch("/api/scan", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        text: $("input").value,
+        filename: $("filename").value,
+        exclude: $("exclude").value,
+        entropy_threshold: parseFloat($("threshold").value),
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      const p = document.createElement("p");
+      p.className = "err";
+      p.textContent = "Error: " + (data.error || r.status);
+      results.appendChild(p);
+      return;
+    }
+    results.appendChild(renderSummary(data.summary));
+    if (data.findings.length) results.appendChild(renderTable(data.findings));
+    results.appendChild(renderCode(data.lines));
+  } catch (e) {
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = "Request failed: " + e.message;
+    results.appendChild(p);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("btn-leaky").onclick = () => loadExample("leaky");
+$("btn-clean").onclick = () => loadExample("clean");
+$("btn-scan").onclick = scan;
+</script>
+</body>
+</html>
