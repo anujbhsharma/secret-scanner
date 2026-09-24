@@ -1,0 +1,7 @@
+# Everything in this file is FAKE and exists only to test the scanner.
+aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"
+deploy_token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+slack_webhook = "xoxb-123456789012-123456789012-AbCdEfGhIjKlMnOpQrSt"
+api_key = "supersecretapikey12345"
+-----BEGIN RSA PRIVATE KEY-----
+aB3dE9fG2hJ7kL4mN8pQ1rS6tU0vW5xY

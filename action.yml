@@ -1,0 +1,60 @@
+name: 'Secret Scanner'
+description: >-
+  Scan pushes and pull requests for leaked secrets (API keys, tokens, private
+  keys) and fail the workflow when it finds them. Secret values are never
+  printed; findings are reported as file/line annotations with redacted values.
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  fail-on-findings:
+    description: "Fail the workflow when secrets are found ('true'/'false')"
+    required: false
+    default: 'true'
+  exclude:
+    description: 'Comma-separated path prefixes to skip (e.g. "tests/,docs/")'
+    required: false
+    default: ''
+  only-diff:
+    description: "Scan only changed lines vs the base ref ('true') or all tracked files ('false')"
+    required: false
+    default: 'true'
+  entropy-threshold:
+    description: 'Shannon entropy threshold for high-entropy token detection (lower = more sensitive)'
+    required: false
+    default: '4.5'
+
+outputs:
+  findings:
+    description: 'Number of secret findings'
+    value: ${{ steps.scan.outputs.findings }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine diff base
+      id: diffbase
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run secret scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_FAIL-ON-FINDINGS: ${{ inputs.fail-on-findings }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_ONLY-DIFF: ${{ inputs.only-diff }}
+        INPUT_ENTROPY-THRESHOLD: ${{ inputs.entropy-threshold }}
+        SCAN_BASE_SHA: ${{ steps.diffbase.outputs.base }}
+      run: python "${{ github.action_path }}/scan.py"
