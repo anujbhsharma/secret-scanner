@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secret-scanner — live demo</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+    --danger: #f85149; --danger-bg: rgba(248,81,73,.12);
+    --ok: #3fb950; --ok-bg: rgba(63,185,80,.12);
+    --warn: #d29922; --warn-bg: rgba(210,153,34,.12);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header { padding: 20px 24px 0; max-width: 1100px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 22px; }
+  header h1 .lock { color: var(--danger); }
+  header p { color: var(--muted); margin: 6px 0 0; }
+  header p a { color: var(--accent); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px;
+         display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 8px; padding: 16px; }
+  #engine-status { font-size: 13px; color: var(--muted); }
+  #engine-status.loading::before { content: "⏳ "; }
+  #engine-status.ready { color: var(--ok); }
+  #engine-status.ready::before { content: "✅ "; }
+  #engine-status.failed { color: var(--danger); }
+  #engine-status.failed::before { content: "⚠️ "; }
+  textarea {
+    width: 100%; min-height: 220px; resize: vertical;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 12px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+         margin-top: 12px; }
+  .row label { color: var(--muted); font-size: 13px; }
+  input[type=text], input[type=number] {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px;
+  }
+  input[type=number] { width: 80px; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--border);
+                 color: var(--text); font-weight: 500; }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .5; cursor: wait; }
+  #results:empty { display: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+  .chip { border-radius: 999px; padding: 4px 12px; font-size: 12px;
+          font-weight: 600; }
+  .chip.bad { background: var(--danger-bg); color: var(--danger);
+              border: 1px solid var(--danger); }
+  .chip.good { background: var(--ok-bg); color: var(--ok);
+               border: 1px solid var(--ok); }
+  .chip.rule { background: var(--bg); color: var(--text);
+               border: 1px solid var(--border); font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px;
+           border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  code.rule { background: var(--bg); padding: 2px 8px; border-radius: 4px;
+              font-size: 12px; border: 1px solid var(--border); }
+  .codeview { background: var(--bg); border: 1px solid var(--border);
+              border-radius: 6px; overflow-x: auto; margin-top: 12px;
+              font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .codeline { display: flex; white-space: pre; padding: 0 12px 0 0; }
+  .codeline .n { width: 52px; flex: none; text-align: right; padding-right: 12px;
+                 color: var(--muted); user-select: none; }
+  .codeline.hit { background: var(--danger-bg); }
+  .codeline.hit .n { color: var(--danger); font-weight: 700; }
+  .err { color: var(--danger); }
+  .err code { color: var(--text); }
+  footer { color: var(--muted); font-size: 12px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="lock">🔒</span> secret-scanner — live demo</h1>
+  <p>The real <code>scan.py</code> detection engine, running entirely in your
+     browser via Pyodide (Python → WebAssembly). No server, nothing you paste
+     ever leaves this page. Secret <em>values</em> are never shown.
+     Source: <a href="https://github.com/anujbhsharma/secret-scanner">anujbhsharma/secret-scanner</a></p>
+</header>
+<main>
+  <section class="panel">
+    <div id="engine-status" class="loading">Starting…</div>
+  </section>
+
+  <section class="panel">
+    <textarea id="input" spellcheck="false" disabled
+      placeholder="Paste code or config text here… (enabled once the engine loads)"></textarea>
+    <div class="row">
+      <button class="ghost" id="btn-leaky" disabled>Load leaky example</button>
+      <button class="ghost" id="btn-clean" disabled>Load clean example</button>
+    </div>
+    <div class="row">
+      <label>filename <input type="text" id="filename" value="pasted.txt" size="18"></label>
+      <label>exclude prefixes <input type="text" id="exclude" placeholder="e.g. vendor,fixtures" size="18"></label>
+      <label>entropy threshold <input type="number" id="threshold" value="4.5" step="0.1" min="0" max="10"></label>
+      <button id="btn-scan" disabled>Scan 🔍</button>
+    </div>
+  </section>
+
+  <section class="panel" id="results"></section>
+
+  <footer class="panel">
+    Runs the exact same detection engine as the GitHub Action
+    (<code>scan.py</code>, fetched from the repo at page load) — same patterns,
+    same redaction guarantees. Prefer running it locally?
+    Clone the repo and run <code>python ui.py</code>.
+  </footer>
+</main>
+
+<script>
+"use strict";
+/* Verified external URLs (all return HTTP 200):
+ * - Pyodide runtime: https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js
+ * - Detection engine: https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/scan.py
+ * - Leaky fixture:    https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/tests/fixtures/leaky.txt
+ * - Clean fixture:    https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/tests/fixtures/clean.py
+ */
+const SCAN_PY_URL = "https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/scan.py";
+const EXAMPLES = {
+  leaky: { url: "https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/tests/fixtures/leaky.txt",
+           filename: "leaky.txt" },
+  clean: { url: "https://raw.githubusercontent.com/anujbhsharma/secret-scanner/main/tests/fixtures/clean.py",
+           filename: "clean.py" },
+};
+
+const $ = id => document.getElementById(id);
+const results = $("results");
+const statusEl = $("engine-status");
+let scanFn = null;   // Python _scan_for_ui, set once the engine is ready
+
+function setStatus(state, text) {
+  statusEl.className = state;
+  statusEl.textContent = text;
+}
+
+function setControls(enabled) {
+  for (const id of ["input", "btn-leaky", "btn-clean", "btn-scan"])
+    $(id).disabled = !enabled;
+}
+
+/* Load scan.py into Pyodide WITHOUT executing its __main__ guard.
+ * runpy.run_path(..., run_name="secret_scanner") runs the module under a
+ * different __name__, so main() (which calls sys.exit and subprocess)
+ * never fires. _scan_for_ui wraps find_secrets and returns plain dicts,
+ * with every secret span masked the same way Finding.masked_line() does. */
+const BOOTSTRAP_PY = `
+import runpy
+_scan_ns = runpy.run_path("/scan.py", run_name="secret_scanner")
+
+def _scan_for_ui(text, filename, entropy_threshold, exclude):
+    findings = _scan_ns["find_secrets"](
+        text,
+        filename=filename,
+        entropy_threshold=float(entropy_threshold),
+        exclude=tuple(exclude))
+    lines = text.splitlines()
+    spans_by_line = {}
+    for f in findings:
+        spans_by_line.setdefault(f.line, []).extend(f.spans)
+    def masked(line_no):
+        raw = lines[line_no - 1] if 1 <= line_no <= len(lines) else ""
+        for s, e in sorted(set(spans_by_line.get(line_no, [])), reverse=True):
+            raw = raw[:s] + "[redacted]" + raw[e:]
+        return raw
+    out = []
+    for f in findings:
+        out.append({
+            "rule_id": f.rule_id,
+            "label": f.label,
+            "line": f.line,
+            "preview_redacted": masked(f.line),
+        })
+    return out
+`;
+
+async function initEngine() {
+  try {
+    if (typeof loadPyodide === "undefined")
+      throw new Error("cdn");
+    setStatus("loading", "Loading the Python runtime (Pyodide)… first visit downloads ~10 MB.");
+    const pyodide = await loadPyodide();
+
+    setStatus("loading", "Fetching the real scan.py detection engine from GitHub…");
+    const r = await fetch(SCAN_PY_URL);
+    if (!r.ok) throw new Error("scan.py fetch failed with HTTP " + r.status);
+    const code = await r.text();
+    if (code.indexOf("def find_secrets") === -1)
+      throw new Error("fetched scan.py did not contain find_secrets — refusing to run it");
+    pyodide.FS.writeFile("/scan.py", code);
+
+    setStatus("loading", "Compiling the detection engine…");
+    pyodide.runPython(BOOTSTRAP_PY);
+    scanFn = pyodide.globals.get("_scan_for_ui");
+
+    // Smoke test: empty input must yield zero findings.
+    const smoke = scanFn("", "smoke.txt", 4.5, []).toJs();
+    if (!Array.isArray(smoke) || smoke.length !== 0)
+      throw new Error("engine smoke test failed");
+
+    setStatus("ready", "Engine ready — the real scan.py is running in your browser.");
+    setControls(true);
+  } catch (e) {
+    const cdnFailed = (e && e.message === "cdn");
+    setStatus("failed",
+      cdnFailed
+        ? "Could not load the Pyodide runtime from the CDN (network or content blocker?)."
+        : "Engine failed to start: " + (e && e.message ? e.message : e));
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = "Fallback: run the same playground locally — clone the repo and run ";
+    const c = document.createElement("code");
+    c.textContent = "python ui.py";
+    p.appendChild(c);
+    p.appendChild(document.createTextNode("."));
+    results.appendChild(p);
+  }
+}
+
+async function loadExample(name) {
+  const ex = EXAMPLES[name];
+  try {
+    const r = await fetch(ex.url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    $("input").value = await r.text();
+    $("filename").value = ex.filename;
+    results.innerHTML = "";
+  } catch (e) {
+    alert("Could not load the " + name + " example: " + e.message);
+  }
+}
+
+function chip(text, cls) {
+  const s = document.createElement("span");
+  s.className = "chip " + cls;
+  s.textContent = text;
+  return s;
+}
+
+function renderSummary(summary) {
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  if (summary.count === 0) {
+    chips.appendChild(chip("0 findings — squeaky clean ✨", "good"));
+  } else {
+    chips.appendChild(chip(summary.count + " finding" +
+      (summary.count === 1 ? "" : "s") + " 🚨", "bad"));
+    for (const [rule, n] of Object.entries(summary.by_rule))
+      chips.appendChild(chip(rule + " × " + n, "rule"));
+  }
+  return chips;
+}
+
+function renderTable(findings) {
+  const t = document.createElement("table");
+  const head = t.insertRow();
+  ["Rule", "Label", "Line", "What the scanner saw"].forEach(h => {
+    const th = document.createElement("th"); th.textContent = h;
+    head.appendChild(th);
+  });
+  for (const f of findings) {
+    const row = t.insertRow();
+    const rc = row.insertCell();
+    const code = document.createElement("code");
+    code.className = "rule"; code.textContent = f.rule_id;
+    rc.appendChild(code);
+    row.insertCell().textContent = f.label;
+    row.insertCell().textContent = f.line;
+    // preview_redacted is produced by scan.py's masking — never raw secrets.
+    row.insertCell().textContent = f.preview_redacted;
+  }
+  return t;
+}
+
+function renderCode(text, findings) {
+  const maskedByLine = {};
+  for (const f of findings) maskedByLine[f.line] = f.preview_redacted;
+  const div = document.createElement("div");
+  div.className = "codeview";
+  text.split("\n").forEach((raw, i) => {
+    const n = i + 1;
+    const dl = document.createElement("div");
+    const hit = Object.prototype.hasOwnProperty.call(maskedByLine, n);
+    dl.className = "codeline" + (hit ? " hit" : "");
+    const num = document.createElement("span");
+    num.className = "n"; num.textContent = n;
+    const txt = document.createElement("span");
+    // Finding lines render masked; everything via textContent — no HTML injection, ever.
+    txt.textContent = hit ? maskedByLine[n] : raw;
+    dl.appendChild(num); dl.appendChild(txt);
+    div.appendChild(dl);
+  });
+  return div;
+}
+
+function scan() {
+  if (!scanFn) return;
+  const btn = $("btn-scan");
+  btn.disabled = true;
+  results.innerHTML = "";
+  try {
+    // Normalize line endings so Python's splitlines() and the JS renderer
+    // agree on line numbering.
+    const text = $("input").value.replace(/\r\n?/g, "\n");
+    const filename = $("filename").value.trim() || "pasted.txt";
+    let threshold = parseFloat($("threshold").value);
+    if (isNaN(threshold)) threshold = 4.5;
+    const exclude = $("exclude").value.split(",")
+      .map(s => s.trim()).filter(s => s.length > 0);
+
+    // Python returns a list of plain dicts; dict_converter gives real JS objects.
+    const findings = scanFn(text, filename, threshold, exclude)
+      .toJs({ dict_converter: Object.fromEntries });
+
+    const byRule = {};
+    for (const f of findings)
+      byRule[f.rule_id] = (byRule[f.rule_id] || 0) + 1;
+
+    results.appendChild(renderSummary({ count: findings.length, by_rule: byRule }));
+    if (findings.length) results.appendChild(renderTable(findings));
+    results.appendChild(renderCode(text, findings));
+  } catch (e) {
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = "Scan failed: " + (e && e.message ? e.message : e);
+    results.appendChild(p);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("btn-leaky").onclick = () => loadExample("leaky");
+$("btn-clean").onclick = () => loadExample("clean");
+$("btn-scan").onclick = scan;
+initEngine();
+</script>
+</body>
+</html>

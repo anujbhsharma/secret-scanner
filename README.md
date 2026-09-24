@@ -1,5 +1,10 @@
 # secret-scanner
 
+[![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://anujbhsharma.github.io/secret-scanner/)
+
+**[Try the live demo](https://anujbhsharma.github.io/secret-scanner/)** — the real
+`scan.py` detection engine running in your browser via Pyodide. No install needed.
+
 A GitHub Action that reads your diffs so your secrets don't end up in everyone
 else's. It scans pushes and pull requests for leaked API keys, tokens, and
 private keys — and fails the workflow when it finds them, before the damage
